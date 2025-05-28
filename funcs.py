@@ -1,6 +1,9 @@
 import numpy as np
 from math import sqrt
 import matplotlib.pyplot as plt
+import cv2 as cv
+import math
+import scipy.ndimage
 
 def normalize_image(input_img, target_mean = 100, target_var = 100):
     img_mean = np.mean(input_img)
@@ -17,11 +20,7 @@ def normalize_image(input_img, target_mean = 100, target_var = 100):
 
     return result
 
-import numpy as np
-import cv2 as cv
-
-def segment_and_normalize(image, block_size=16, std_ratio=0.2):
-
+def segment_and_normalize(image, block_size=9, std_ratio=0.2):
     height, width = image.shape
     roi_threshold = np.std(image) * std_ratio
 
@@ -37,40 +36,47 @@ def segment_and_normalize(image, block_size=16, std_ratio=0.2):
             std_block = np.std(block)
             local_std_map[y:y_end, x:x_end] = std_block
 
-    # Generate mask using std threshold
     roi_mask[local_std_map < roi_threshold] = 0
 
-    # Clean the mask using morphological operations
+    ellipse_center_y = (50 + 320) // 2
+    ellipse_center_x = (50 + 220) // 2
+    ellipse_height = 320 - 50
+    ellipse_width = 220 - 50
+    
+    y_coords, x_coords = np.ogrid[:height, :width]
+    ellipse_mask = ((x_coords - ellipse_center_x) ** 2 / (ellipse_width/2) ** 2 + 
+                    (y_coords - ellipse_center_y) ** 2 / (ellipse_height/2) ** 2) <= 1
+    
+    roi_mask[ellipse_mask] = 1
+
     morph_kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, (block_size * 2, block_size * 2))
     roi_mask = cv.morphologyEx(roi_mask, cv.MORPH_OPEN, morph_kernel)
     roi_mask = cv.morphologyEx(roi_mask, cv.MORPH_CLOSE, morph_kernel)
+    
+    roi_mask[ellipse_mask] = 1
 
-    # Apply mask to input image
     masked_img *= roi_mask
 
-    # Normalize using background statistics
-    from scipy.stats import zscore
     background_pixels = image[roi_mask == 0]
-    bg_mean = np.mean(background_pixels)
-    bg_std = np.std(background_pixels)
-    normalized_img = (image - bg_mean) / bg_std
-
+    if len(background_pixels) > 0:
+        bg_mean = np.mean(background_pixels)
+        bg_std = np.std(background_pixels)
+        if bg_std > 0:
+            normalized_img = (image - bg_mean) / bg_std
+        else:
+            normalized_img = image - bg_mean
+    else:
+        normalized_img = (image - np.mean(image)) / np.std(image)
 
     return masked_img, normalized_img, roi_mask
 
-import numpy as np
-import cv2 as cv
-import math
-
 def estimate_orientation_map(image, block_size=16, apply_smoothing=False):
 
-    # Gradient-based functions
     calc_numerator = lambda gx, gy: 2 * gx * gy
     calc_denominator = lambda gx, gy: gx ** 2 - gy ** 2
 
     height, width = image.shape
 
-    # Define Sobel kernels
     sobel_y = np.array([[-1, 0, 1],
                         [-2, 0, 2],
                         [-1, 0, 1]], dtype=int)
@@ -109,7 +115,6 @@ def estimate_orientation_map(image, block_size=16, apply_smoothing=False):
 
     return angle_array
 
-
 def render_orientation_lines(image, roi_mask, angle_grid, block_size=16):
 
     height, width = image.shape
@@ -135,12 +140,6 @@ def render_orientation_lines(image, roi_mask, angle_grid, block_size=16):
                 cv.line(output_img, start, end, color=(150, 150, 150), thickness=1)
 
     return output_img
-
-import numpy as np
-
-import numpy as np
-import scipy.ndimage
-import math
 
 def ridge_frequency(image, mask, orientation_map, block_size=16, kernel_size=5, min_wavelength=5, max_wavelength=5):
 
@@ -193,9 +192,6 @@ def ridge_frequency(image, mask, orientation_map, block_size=16, kernel_size=5, 
 
     return median_frequency * mask
 
-import numpy as np
-import scipy.ndimage
-
 def gabor_filter(image, orientation, frequency, kx=0.65, ky=0.65):
 
     angle_step = 3  
@@ -241,32 +237,96 @@ def gabor_filter(image, orientation, frequency, kx=0.65, ky=0.65):
 
     return result_img
 
-# def get_minutiae_points(skeleton):
-#     # Upewnij się, że to binarny obraz 0/1
-#     bin_skel = (skeleton > 0).astype(np.uint8)
-#     minutiae_endings = []
-#     minutiae_bifurcations = []
+def k3m_skeleton(img, mask=None):
 
-#     # Przejdź przez każdy piksel (bez krawędzi)
-#     for x in range(1, bin_skel.shape[0] - 1):
-#         for y in range(1, bin_skel.shape[1] - 1):
-#             if bin_skel[x, y] == 1:
-#                 # Sąsiedztwo 8-punktowe
-#                 neighbors = [
-#                     bin_skel[x-1, y-1], bin_skel[x-1, y], bin_skel[x-1, y+1],
-#                     bin_skel[x, y+1], bin_skel[x+1, y+1], bin_skel[x+1, y],
-#                     bin_skel[x+1, y-1], bin_skel[x, y-1]
-#                 ]
-#                 count = sum(neighbors)
-#                 if count == 1:
-#                     minutiae_endings.append((y, x))  # x/y zamiana dla OpenCV/plt
-#                 elif count == 3:
-#                     minutiae_bifurcations.append((y, x))
+    def neighbours(x, y, image):
+        return [image[x-1, y], image[x-1, y+1], image[x, y+1], image[x+1, y+1],
+            image[x+1, y], image[x+1, y-1], image[x, y-1], image[x-1, y-1]]
 
-#     return minutiae_endings, minutiae_bifurcations
+    def transitions(neighbors):
+        n = neighbors + neighbors[0:1]
+        return sum((n[i] == 0 and n[i+1] == 1) for i in range(8))
+    
+    img = (img > 0).astype(np.uint8)
+    img = np.pad(img, ((1,1),(1,1)), 'constant', constant_values=0)
+    
+    changed = True
+    while changed:
+        changed = False
+        for pattern in [
+            [0, 2, 4, 6],
+            [0], [2], [4], [6],
+        ]:
+            to_remove = []
+            for x in range(1, img.shape[0] - 1):
+                for y in range(1, img.shape[1] - 1):
+                    if img[x, y] == 1:
+                        nb = neighbours(x, y, img)
+                        if 2 <= sum(nb) <= 6 and transitions(nb) == 1:
+                            if any(nb[i] == 0 for i in pattern):
+                                to_remove.append((x, y))
+            if to_remove:
+                changed = True
+                for x, y in to_remove:
+                    img[x, y] = 0
 
-import numpy as np
-import cv2 as cv
+    skel = (img[1:-1, 1:-1] * 255).astype(np.uint8)
+    skel = cv.bitwise_not(skel)
+
+    if mask is not None:
+        mask_bin = (mask > 0).astype(np.uint8) * 255
+        skel = cv.bitwise_and(skel, mask_bin)
+        skel[mask_bin == 0] = 255
+    return skel
+
+def morphological_skeleton(image):
+    img = image.copy()
+
+    if len(img.shape) == 3:
+        img = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+    
+    _, img = cv.threshold(img, 127, 255, cv.THRESH_BINARY)
+    
+    kernel_noise = cv.getStructuringElement(cv.MORPH_ELLIPSE, (2, 2))
+    img = cv.morphologyEx(img, cv.MORPH_OPEN, kernel_noise, iterations=1)
+
+    skel = np.zeros(img.shape, np.uint8)
+    element = cv.getStructuringElement(cv.MORPH_CROSS, (3, 3))
+
+    while True:
+        open_img = cv.morphologyEx(img, cv.MORPH_OPEN, element)
+        temp = cv.subtract(img, open_img)
+        eroded = cv.erode(img, element)
+        skel = cv.bitwise_or(skel, temp)
+        img = eroded.copy()
+        if cv.countNonZero(img) == 0:
+            break
+
+    skel = cv.bitwise_not(skel)
+    
+    kernel_vertical = np.array([[1, 0],
+                                [1, 0]], dtype=np.uint8)
+    
+    kernel_horizontal = np.array([[1, 1],
+                                  [0, 0]], dtype=np.uint8)
+    
+    kernel_diag1 = np.array([[1, 0, 0],
+                             [0, 1, 0],
+                             [0, 0, 1]], dtype=np.uint8)
+    
+    kernel_diag2 = np.array([[0, 0, 1],
+                             [0, 1, 0],
+                             [1, 0, 0]], dtype=np.uint8)
+    
+    for kernel in [kernel_vertical, kernel_horizontal, kernel_diag1, kernel_diag2]:
+        skel = cv.morphologyEx(skel, cv.MORPH_OPEN, kernel, iterations=1)
+
+    skel[:7, :] = 255
+    skel[-7:, :] = 255
+    skel[:, :7] = 255
+    skel[:, -7:] = 255 
+
+    return skel
 
 def extract_minutiae(image, kernel_size=3, threshold=10):
 
@@ -293,23 +353,9 @@ def extract_minutiae(image, kernel_size=3, threshold=10):
                 transitions = sum((neighbors[i] != neighbors[i + 1]) for i in range(len(neighbors) - 1)) // 2
 
                 if transitions == 1:
-                    cv.circle(output, (x, y), 4, color_map["ending"], -1)  
+                    cv.circle(output, (x, y), 2, color_map["ending"], -1)  
                 elif transitions == 3:
-                    cv.circle(output, (x, y), 4, color_map["bifurcation"], -1)  
-
+                    cv.circle(output, (x, y), 2, color_map["bifurcation"], -1)  
 
     return output
-
-
-def show_minutiae(image, endings, bifurcations):
-    plt.figure(figsize=(8, 8))
-    plt.imshow(image, cmap='gray')
-    for (x, y) in endings:
-        plt.plot(x, y, 'ro', markersize=4, label='Ending' if 'Ending' not in plt.gca().get_legend_handles_labels()[1] else "")
-    for (x, y) in bifurcations:
-        plt.plot(x, y, 'go', markersize=4, label='Bifurcation' if 'Bifurcation' not in plt.gca().get_legend_handles_labels()[1] else "")
-    plt.legend()
-    plt.title("Detected Minutiae")
-    plt.axis('off')
-    plt.show()
 
