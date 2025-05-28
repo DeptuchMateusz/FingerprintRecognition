@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import cv2 as cv
 import math
 import scipy.ndimage
+import pandas as pd
 
 def normalize_image(input_img, target_mean = 100, target_var = 100):
     img_mean = np.mean(input_img)
@@ -328,17 +329,48 @@ def morphological_skeleton(image):
 
     return skel
 
-def extract_minutiae(image, kernel_size=3, threshold=10):
+# def extract_minutiae(image, kernel_size=3, threshold=10):
 
+#     binary = (image < threshold).astype(np.uint8)
+
+#     output = cv.cvtColor(image, cv.COLOR_GRAY2BGR)
+#     height, width = image.shape
+#     color_map = {"ending": (220, 0, 0), "bifurcation": (0, 220, 0)}
+
+#     if kernel_size == 3:
+#         offsets = [(-1, -1), (-1, 0), (-1, 1),
+#                    ( 0, 1), (1, 1), (1, 0),
+#                    (1, -1), (0, -1), (-1, -1)]
+#     else:
+#         offsets = [(-2, -2), (-2, -1), (-2, 0), (-2, 1), (-2, 2),
+#                    (-1, 2), (0, 2), (1, 2), (2, 2),
+#                    (2, 1), (2, 0), (2, -1), (2, -2),
+#                    (1, -2), (0, -2), (-1, -2), (-2, -2)]
+
+#     for y in range(kernel_size, height - kernel_size):
+#         for x in range(kernel_size, width - kernel_size):
+#             if binary[y, x] == 1:
+#                 neighbors = [binary[y + dy, x + dx] for dx, dy in offsets]
+#                 transitions = sum((neighbors[i] != neighbors[i + 1]) for i in range(len(neighbors) - 1)) // 2
+
+#                 if transitions == 1:
+#                     cv.circle(output, (x, y), 2, color_map["ending"], -1)  
+#                 elif transitions == 3:
+#                     cv.circle(output, (x, y), 2, color_map["bifurcation"], -1)  
+
+#     return output
+
+
+def extract_minutiae(image, kernel_size=3, threshold=10, draw_arrows=False):
     binary = (image < threshold).astype(np.uint8)
-
     output = cv.cvtColor(image, cv.COLOR_GRAY2BGR)
     height, width = image.shape
-    color_map = {"ending": (100, 0, 0), "bifurcation": (0, 100, 0)}
+    color_map = {"ending": (220, 0, 0), "bifurcation": (0, 220, 0)}
+    minutiae_data = []
 
     if kernel_size == 3:
         offsets = [(-1, -1), (-1, 0), (-1, 1),
-                   ( 0, 1), (1, 1), (1, 0),
+                   (0, 1), (1, 1), (1, 0),
                    (1, -1), (0, -1), (-1, -1)]
     else:
         offsets = [(-2, -2), (-2, -1), (-2, 0), (-2, 1), (-2, 2),
@@ -353,9 +385,32 @@ def extract_minutiae(image, kernel_size=3, threshold=10):
                 transitions = sum((neighbors[i] != neighbors[i + 1]) for i in range(len(neighbors) - 1)) // 2
 
                 if transitions == 1:
-                    cv.circle(output, (x, y), 2, color_map["ending"], -1)  
-                elif transitions == 3:
-                    cv.circle(output, (x, y), 2, color_map["bifurcation"], -1)  
+                    angle = None
+                    if draw_arrows:
+                        for dx, dy in offsets:
+                            if binary[y + dy, x + dx] == 1:
+                                angle = math.atan2(dy, dx)
+                                x2 = int(x + 15 * math.cos(angle))
+                                y2 = int(y + 15 * math.sin(angle))
+                                cv.arrowedLine(output, (x, y), (x2, y2), color_map["ending"], 1, tipLength=0.3)
+                                break
+                    cv.circle(output, (x, y), 3, color_map["ending"], -1)
+                    minutiae_data.append({"x": x, "y": y, "type": "ending", "angle": angle})
 
-    return output
+                elif transitions == 3:
+                    angle = None
+                    if draw_arrows:
+                        dirs = [(dx, dy) for dx, dy in offsets if binary[y + dy, x + dx] == 1]
+                        if dirs:
+                            dx_avg = -np.mean([dx for dx, dy in dirs])
+                            dy_avg = -np.mean([dy for dx, dy in dirs])
+                            angle = math.atan2(dy_avg, dx_avg)
+                            x2 = int(x + 15 * math.cos(angle))
+                            y2 = int(y + 15 * math.sin(angle))
+                            cv.arrowedLine(output, (x, y), (x2, y2), color_map["bifurcation"], 1, tipLength=0.3)
+                    cv.circle(output, (x, y), 3, color_map["bifurcation"], -1)
+                    minutiae_data.append({"x": x, "y": y, "type": "bifurcation", "angle": angle})
+
+    df = pd.DataFrame(minutiae_data)
+    return output, df
 
