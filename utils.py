@@ -305,22 +305,22 @@ def morphological_skeleton(image):
 
     skel = cv.bitwise_not(skel)
     
-    kernel_vertical = np.array([[1, 0],
-                                [1, 0]], dtype=np.uint8)
+    # kernel_vertical = np.array([[1, 0],
+    #                             [1, 0]], dtype=np.uint8)
     
-    kernel_horizontal = np.array([[1, 1],
-                                  [0, 0]], dtype=np.uint8)
+    # kernel_horizontal = np.array([[1, 1],
+    #                               [0, 0]], dtype=np.uint8)
     
-    kernel_diag1 = np.array([[1, 0, 0],
-                             [0, 1, 0],
-                             [0, 0, 1]], dtype=np.uint8)
+    # kernel_diag1 = np.array([[1, 0, 0],
+    #                          [0, 1, 0],
+    #                          [0, 0, 1]], dtype=np.uint8)
     
-    kernel_diag2 = np.array([[0, 0, 1],
-                             [0, 1, 0],
-                             [1, 0, 0]], dtype=np.uint8)
+    # kernel_diag2 = np.array([[0, 0, 1],
+    #                          [0, 1, 0],
+    #                          [1, 0, 0]], dtype=np.uint8)
     
-    for kernel in [kernel_vertical, kernel_horizontal, kernel_diag1, kernel_diag2]:
-        skel = cv.morphologyEx(skel, cv.MORPH_OPEN, kernel, iterations=1)
+    # # for kernel in [kernel_vertical, kernel_horizontal, kernel_diag1, kernel_diag2]:
+    # #     skel = cv.morphologyEx(skel, cv.MORPH_OPEN, kernel, iterations=1)
 
     skel[:7, :] = 255
     skel[-7:, :] = 255
@@ -361,22 +361,17 @@ def morphological_skeleton(image):
 #     return output
 
 
-def extract_minutiae(image, kernel_size=3, threshold=10, draw_arrows=False):
+def extract_minutiae(image, threshold=10, draw_arrows=False):
+    kernel_size=3
     binary = (image < threshold).astype(np.uint8)
     output = cv.cvtColor(image, cv.COLOR_GRAY2BGR)
     height, width = image.shape
     color_map = {"ending": (220, 0, 0), "bifurcation": (0, 220, 0)}
     minutiae_data = []
 
-    if kernel_size == 3:
-        offsets = [(-1, -1), (-1, 0), (-1, 1),
-                   (0, 1), (1, 1), (1, 0),
-                   (1, -1), (0, -1), (-1, -1)]
-    else:
-        offsets = [(-2, -2), (-2, -1), (-2, 0), (-2, 1), (-2, 2),
-                   (-1, 2), (0, 2), (1, 2), (2, 2),
-                   (2, 1), (2, 0), (2, -1), (2, -2),
-                   (1, -2), (0, -2), (-1, -2), (-2, -2)]
+    offsets = [(-1, -1), (-1, 0), (-1, 1),
+                (0, 1), (1, 1), (1, 0),
+                (1, -1), (0, -1), (-1, -1)]
 
     for y in range(kernel_size, height - kernel_size):
         for x in range(kernel_size, width - kernel_size):
